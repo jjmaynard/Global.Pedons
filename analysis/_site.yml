@@ -1,7 +1,7 @@
-name: "Global.Pedons"
+name: Global.Pedons
 output_dir: ../docs
 navbar:
-  title: "Global Pedons"
+  title: Global Pedons
   left:
   - text: Overview
     href: index.html
@@ -13,6 +13,10 @@ navbar:
     href: notes.html
   - text: License
     href: license.html
+  right:
+  - icon: fa-github
+    text: Source code
+    href: https://github.com/jjmaynard/Global.Pedons
 output:
   workflowr::wflow_html:
     toc: yes
