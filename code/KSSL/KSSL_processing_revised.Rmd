@@ -1,0 +1,244 @@
+---
+title: "KSSL + NASIS Data Processing (Updated)"
+output: html_notebook
+---
+
+
+
+### This script processes the KSSL NCSS SCD and NASIS pedon data to create a combined pedon database with both morphology and soil chemical data. The code uses the newest KSSL and NASIS data found on the NRCS cloudVault (https://new.cloudvault.usda.gov/index.php/s/eSoPYbWDBQNX2HP). Some code from Dylan Beaudette's KSSL processing steps were used as described here: (https://github.com/dylanbeaudette/process-kssl-snapshot).Details of the new snapshot datasets are described in the NCSS-Tech workgroup notes from 2019-03-12 (https://github.com/ncss-tech/lab-data-delivery/blob/master/meeting-notes/meeting-notes-2019-03-12.md)
+```{r}
+library(soilDB)
+library(aqp)
+library(stringi)
+library(rvest)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(lubridate)
+library(stringr)
+library(tidyverse)
+library(sf)
+library(colorspace)
+
+```
+
+
+##Load in data tables from NCSS SCD
+```{r}
+KSSL_layers_new <- st_layers(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Tech_Data_Download/KSSL_Download_20200114/NCSS_Characterization_Database_newSchema_20200114.gdb")
+
+# Driver: OpenFileGDB 
+# Available layers:
+#                                                 layer_name geometry_type features fields
+# 1                                       combine_nasis_ncss         Point    65949     80
+# 2                                                    pedon            NA    65966     10
+# 3                                              preparation            NA       62      8
+# 4                                                  rosetta            NA    79326     11
+# 5                                   lab_analysis_procedure            NA      514     10
+# 6  lab_calculations_including_estimates_and_default_values            NA   299483     81
+# 7                                  lab_chemical_properties            NA   319086    207
+# 8                  lab_major_and_trace_elements_and_oxides            NA    32694     42
+# 9                                          lab_method_code            NA      806      9
+# 10                              lab_mineralogy_glass_count            NA    34944    195
+# 11                                 lab_physical_properties            NA   886111    120
+# 12                                    lab_xray_and_thermal            NA    66584    100
+# 13                                                    site            NA   128240     14
+# 14                                              lab_webmap            NA    53603     16
+# 15                                                   layer            NA   410011     22
+# 16                                                 analyte            NA      530      5
+# 17                                                lab_area            NA    12011      9
+
+combine_nasis_ncss  <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Tech_Data_Download/KSSL_Download_20200114/NCSS_Characterization_Database_newSchema_20200114.gdb", layer=KSSL_layers_new[[1]][1]) 
+
+#many more sites than pedons or data. it looks like this table isn't needed since we can just use the 'combine_nasis_ncss'
+# ncss_site_new  <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Tech_Data_Download/KSSL_Download_20200114/NCSS_Characterization_Database_newSchema_20200114.gdb", layer=KSSL_layers_new[[1]][13]) 
+
+#here is the bulk of the data to join
+ncss_chem  <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Tech_Data_Download/KSSL_Download_20200114/NCSS_Characterization_Database_newSchema_20200114.gdb", layer=KSSL_layers_new[[1]][7]) 
+ncss_phys  <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Tech_Data_Download/KSSL_Download_20200114/NCSS_Characterization_Database_newSchema_20200114.gdb", layer=KSSL_layers_new[[1]][11]) 
+ncss_layer  <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Tech_Data_Download/KSSL_Download_20200114/NCSS_Characterization_Database_newSchema_20200114.gdb", layer=KSSL_layers_new[[1]][15]) 
+
+NCSS_hz_new <- combine_nasis_ncss %>% 
+              left_join(ncss_chem, by = c("pedlabsampnum"="labsampnum"))  %>% 
+              left_join(ncss_phys, by = c("pedlabsampnum"="labsampnum"))  %>% 
+              dplyr::select(pedon_key, site_key, layer_key, pedlabsampnum, layer_sequence, hzn_top, hzn_bot, hzn_desgn, hzn_desgn_old, texture_lab , sand_total, silt_total, clay_total, total_frag_wt_pct_gt_2_mm_ws, total_carbon_ncs, organic_carbon_walkley_black, estimated_organic_carbon, horizontal_datum_name, latitude_direction, latitude_degrees, latitude_minutes, latitude_seconds, longitude_direction, longitude_degrees, longitude_minutes, longitude_seconds, latitude_std_decimal_degrees, longitude_std_decimal_degrees) %>%
+              rename(lab_texture_class = texture_lab , sand = sand_total, silt = silt_total, clay = clay_total, frags_tot = total_frag_wt_pct_gt_2_mm_ws, toc = total_carbon_ncs, oc = organic_carbon_walkley_black, oc_est = estimated_organic_carbon)  %>%
+              distinct()  %>% 
+              arrange(pedon_key, hzn_top)  %>% 
+              filter(!is.na(labsampnum))
+
+
+NCSS_hz_new %>% filter(!is.na(latitude_std_decimal_degrees)) %>% select(pedon_key) %>% distinct() %>% pull() %>% length()
+
+
+KSSL_layers <- st_layers(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb")
+
+
+NCSS_hz_new <- ncss_site_new %>% 
+              left_join(ncss_layer, by = "site_key")
+```
+
+```{r}
+#More recent NASIS data from 2020 snapshot
+NASIS_layers <- st_layers(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Tech_Data_Download/KSSL_Download_20200114/NASIS_Morphological_20200116.gdb")
+
+# Driver: OpenFileGDB 
+# Available layers:
+#                         layer_name geometry_type features fields
+# 1              MetadataCardinality            NA        4      2
+# 2             MetadataColumnLookup            NA     2673     11
+# 3              MetadataIndexDetail            NA     1920      5
+# 4       MetadataRelationshipDetail            NA      981     11
+# 5       MetadataRelationshipMaster            NA      914     15
+# 6                    MetadataTable            NA      454     16
+# 7                 ncsslayerlabdata            NA   359783     84
+# 8                 ncsspedonlabdata            NA   359783     20
+# 9                   pediagfeatures            NA    59265     11
+# 10           pedondbcolumnmetadata            NA     1018      5
+# 11            pedondbtablemetadata            NA       71      5
+# 12                           pefmp            NA     6948      8
+# 13          pehydricfieldindicator            NA      391      6
+# 14                peinfiltrationch            NA        8     13
+# 15            peinfiltrationchdata            NA        0      9
+# 16                peinfiltrationfh            NA       75     11
+# 17            peinfiltrationfhdata            NA        2      7
+# 18           peinfiltrationsummary            NA      116     10
+# 19         pepenetrationresistance            NA      306     15
+# 20                  perestrictions            NA     3996     12
+# 21                 pesoilstability            NA      307     16
+# 22                  petaxhistfmmin            NA    58971      7
+# 23                petaxhistmoistcl            NA    41111      6
+# 24                    petaxhistory            NA    86939     30
+# 25                          petext            NA    33476     11
+# 26                 petxhistfmother            NA    15719      6
+# 27                      phcemagent            NA      863      6
+# 28                      phcoledata            NA        0      8
+# 29                         phcolor            NA   517056     11
+# 30                     phconccolor            NA     7944     10
+# 31                         phconcs            NA    39104     13
+# 32                        phcracks            NA      167     11
+# 33                            phdb            NA      696     29
+# 34             phdbcompliantcavity            NA        1     15
+# 35                        phdbcore            NA      465     12
+# 36                 phdbcorereading            NA       40      5
+# 37                       phdbscoop            NA       77     13
+# 38                phdbscoopreading            NA       36      5
+# 39                   phdesgnsuffix            NA   193845      6
+# 40                     phfeatcolor            NA      654     10
+# 41                      phfeatures            NA     2817     12
+# 42                           phfmp            NA     4987      8
+# 43                         phfrags            NA   161243     15
+# 44                   phgrcountdata            NA        0     13
+# 45                phgrcountsummary            NA       10     11
+# 46                        phhuarts            NA      534     16
+# 47            phhydrometeranalysis            NA       14     11
+# 48                phhydrometerdata            NA       32      8
+# 49                phksatamoozedata            NA        0     10
+# 50               phksatamoozemeter            NA       14     14
+# 51                      phksatring            NA        0     16
+# 52                  phksatringdata            NA        0      9
+# 53                   phksatsummary            NA      119     10
+# 54                    phlabresults            NA    15450     62
+# 55                       phmottles            NA    61750     14
+# 56                        phorizon            NA   425589     69
+# 57                         phpores            NA   145538     10
+# 58                          phpvsf            NA   166817     10
+# 59                     phpvsfcolor            NA   102402     10
+# 60                   phrdxfeatures            NA   127348     13
+# 61                   phredoxfcolor            NA   105125     10
+# 62                         phroots            NA   269770      9
+# 63                        phsample            NA   393105     13
+# 64                     phstructure            NA   412786     10
+# 65                          phtext            NA   168873     11
+# 66                       phtexture            NA   365208      7
+# 67                    phtexturemod            NA    59676      6
+# 68                      phvnirscan            NA        0     10
+# 69                phvnirscanresult            NA        0     10
+# 70                 plotdisturbance            NA        0     10
+# 71                  plotgrazinguse            NA        0      9
+# 72      plotmainforeststanddetails            NA        0     11
+# 73              plotplantinventory            NA        0     32
+# 74        plotplanttypecanopycover            NA        0     11
+# 75        plotsamplingprotocolused            NA        0      9
+# 76            plotspeciesbasalarea            NA        0      9
+# 77               plottreeinventory            NA        0     10
+# 78                plottreescounted            NA        0      7
+# 79        plottreesiteindexdetails            NA        0     17
+# 80        plottreesiteindexsummary            NA        0     13
+# 81                 plottreesummary            NA        0      9
+# 82                    siteaoverlap            NA   109679      7
+# 83                     sitebedrock            NA    12383     15
+# 84                    siteassocsoi            NA    12729      4
+# 85              siteecositehistory            NA      675      5
+# 86                   siteassocsite            NA        0      4
+# 87                  sitegeomordesc            NA    58896      7
+# 88                         siteobs            NA    64817     50
+# 89                          sitepm            NA    58846     11
+# 90                        sitetext            NA     6804      9
+# 91                       siteassoc            NA        0      3
+# 92                  siteerosionacc            NA    14193      4
+# 93                     siteobstext            NA     2714      9
+# 94                   sitesoilmoist            NA     6142     11
+# 95                    sitesoiltemp            NA     1093      6
+# 96                   sitesurffrags            NA     7977     12
+# 97                   siteassoctext            NA        0      9
+# 98                        transect            NA     2772      9
+# 99          transectestcomposition            NA       94      8
+# 100                   transecttext            NA      221      9
+# 101                       beltdata            NA        0      9
+# 102      daubenmirecancovclasssumm            NA        0      9
+# 103     daubenmirecancovquaddetail            NA        0      6
+# 104          densityquadratdetails            NA        0     11
+# 105              dwrquadratdetails            NA        0     10
+# 106        frequencyquadratdetails            NA        0      8
+# 107       nestedfreqquadratdetails            NA        0      8
+# 108         nestedfrequencysummary            NA        0      9
+# 109               windbreakrowdata            NA        0     39
+# 110           comparativeyielddata            NA        0      8
+# 111    comparativeyieldrefquadrats            NA        0     10
+# 112                croptreedetails            NA        0     11
+# 113         croptreesubplotdetails            NA        0      9
+# 114                croptreesummary            NA        0     14
+# 115                 croptreetotals            NA        0      9
+# 116               groundcovdetails            NA        0      8
+# 117           groundsurfcovdetails            NA        0      8
+# 118        plantprodquadratdetails            NA        0     15
+# 119               siteiristubedata            NA       16     12
+# 120                  sitemuoverlap            NA    12574      6
+# 121                siteothvegclass            NA      189      6
+# 122               sitetreescounted            NA        0      7
+# 123      siteusgsquadrangleoverlap            NA        0      6
+# 124             sitewoodybasalarea            NA        0      7
+# 125           soilmoistmonitordata            NA        2     11
+# 126                soilmonitordata            NA        3     12
+# 127            soiltempmonitordata            NA        1     11
+# 128            subplotplantdetails            NA        0      9
+# 129            totalquadratharvest            NA        0      8
+# 130             transectgapdetails            NA        0     10
+# 131            transectgroundcover            NA        0     11
+# 132  transectgroundcoverdatalegacy            NA        0     10
+# 133        transectgroundsurfcover            NA        0     11
+# 134   transectoverstorycanopycover            NA        0     10
+# 135   transectsamplingprotocolused            NA        0      9
+# 136 transectstandingbiomassdetails            NA        0     11
+# 137                    vegplottext            NA        0     11
+# 138                    vegtransect            NA        0     70
+# 139        vegtransectplantsummary            NA        0     78
+# 140                vegtransecttext            NA        0     11
+# 141          basalareatreescounted            NA        0      8
+# 142            belttransectsummary            NA        0      9
+# 143         pointplantcoverdetails            NA        0     11
+# 144                        vegplot            NA        0    168
+# 145                           area            NA        0      7
+# 146                 ecologicalsite            NA        0      7
+# 147                       areatype            NA        0      4
+# 148           MetadataDomainDetail            NA     6830      8
+# 149                          pedon         Point    64817     67
+# 150                           site            NA    64817     69
+
+
+```
+
+
+
+

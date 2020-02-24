@@ -1,0 +1,123 @@
+---
+title: "Mexico Pedon Processing"
+output: html_notebook
+---
+
+```{r, echo=FALSE}
+required.packages <- c("here", "gdalUtils", "rgdal", "RODBC", "GSIF", "xlsx", "sf", "tidyverse", "viridis", "rvest", "foreign", "dplyr", "aqp", "soilDB", "colorspace", "stringr", "cluster", "sharpshootR", "colorscience", "reshape2", "purrr", "jsonlite", "hexbin", "rms", "farver", "openxlsx")
+new.packages <- required.packages[!(required.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages)) install.packages(new.packages)
+lapply(required.packages, require, character.only=T)
+rm(required.packages, new.packages)
+
+setwd("C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/Mexico")
+data(soil.classes)
+```
+
+# Load in the two pedon databases for Mexico
+
+  1. Mexico Pedon dataset #1 (perfilv12) 1980-1996, 9,549 profiles
+  2. Mexico Pedon dataset #2 (perfiles_serieii) 1998-2007, 2,940 profiles 
+```{r}
+mexico_pedon1 <- st_read("C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/Mexico/Soil_Profiles_SerieI/shape/perfilv12.shp", quiet = TRUE)
+
+mexico_pedon2 <- st_read("C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/Mexico/Soil_Profiles_SerieII/perfiles_suelos_shp/perfiles_serieii.shp", quiet = TRUE)
+
+# Define projections and reproject
+st_crs(mexico_pedon2) <- 6362 # EPSG:6362 Mexico ITRF92 / LCC
+
+mexico_pedon1 <- st_transform(mexico_pedon1, 4326)
+mexico_pedon2 <- st_transform(mexico_pedon2, 4326)
+
+# Number of unique pedons
+points <- c(st_geometry(mexico_pedon2), st_geometry(mexico_pedon1))
+length(unique(points)) # 13,964 pedons
+
+```
+
+# Processing of Mexico Pedon dataset #1 (perfilv12)
+## Step 1: Subset and rename data columns
+```{r}
+mexico_pedon1_sub <- mexico_pedon1  %>% dplyr::mutate(FAO="FAO68") %>% dplyr::mutate(Lim=ifelse(LIM_ROCA=="x", "BedR", ifelse(LIM_REGO=="x", "Rego", ifelse(LIM_CEME=="x", "Cem", ifelse(LIM_NIVF=="x", "Wat", NA))))) %>% dplyr::select(ID=IDENTIFI, FAO, FAO_Code=FAO68, Lim, A_ColorD=A_COLORS, A_ColorM=A_COLORH, E_ColorD=E_COLOR, B_ColorM=B_COLORH, HONU=NHORIZON, HzName=HSIMBOLO, TOPDEP=HLIMSUPE, BOTDEP=HLIMINFE, Clay=ARCILLA, Silt=LIMO, Sand=ARENA, ColorD = COLORSEC, ColorM = COLORHUM,  ORGC=MO, geometry)
+
+mexico_pedon1_sub <- mexico_pedon1_sub %>% group_by(ID) %>% filter(!all(is.na(TOPDEP)) & !all(is.na(BOTDEP))) %>% filter(HONU!=0) %>% ungroup()
+mexico_pedon1_sub_coords <- do.call(rbind, st_geometry(mexico_pedon1_sub)) %>% as.data.frame() %>% setNames(c("lon","lat"))
+st_geometry(mexico_pedon1_sub) <- NULL
+mexico_pedon1_sub <- cbind(mexico_pedon1_sub, mexico_pedon1_sub_coords)
+mexico_pedon1_sub <- mexico_pedon1_sub %>% dplyr::select(ID, FAO, FAO_Code, HONU, HzName, TOPDEP, BOTDEP, Clay, Silt, Sand, ColorD, ColorM, ORGC, lat, lon)
+
+```
+
+## Step 2: Taxonomy translation/harmonization.
+Mexico Pedon dataset #1 used FAO68 taxonomy and is in spanish. Need to perform the following steps to translate and convert the taxonomy to FAO90
+  1. Create FAO68 (assuming the same as FAO74) translation table
+  2. Create conversion table between FA68 taxonomy names and FAO90 taxonomy names using the GSIF 'soil.classes' subtables and WRB documents
+```{r}
+FAO68 <-  read.csv("C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/Mexico/Soil_Profiles_SerieI/FAO68_taxonomy_revised.csv", header=T)
+names(FAO68) <- c("Code", "WRB_Taxo")
+FAO68$WRB_Taxo <-  str_to_title(FAO68$WRB_Taxo)
+mexico_pedon1_sub <- mexico_pedon1_sub %>% left_join(FAO68, by=c("FAO_Code"="Code"))
+
+# 347 pedons had FAO taxonomy codes that did not exist. I have excluded these
+mexico_pedon1_sub <- mexico_pedon1_sub %>% filter(!is.na(WRB_Taxo)) # 4,286 pedons after filtering out pedons with no depth data
+
+
+#Load in WRB translation tables
+FAO74_WRB1994_LT <- soil.classes$WRB_versions %>% select(World_Soil_Map_1974_Group, World_Soil_Map_1974_Subgroup, WRB_1994_Group, WRB_1994_Subgroup, FAO_1974_NAME, WRB_1994_NAME) %>% distinct()
+
+
+
+
+
+
+WRB_RSG_2006 <- read.xlsx("C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/Mexico/WRB_Reference_Soil_Groups_2006.xlsx")
+names(WRB_RSG_2006) <- c("RSG_name_en", "RSG_name_sp", "RSG_code")
+WRB_Qual_2006 <- read.xlsx("C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/Mexico/WRB_qualifiers_specifiers_2006.xlsx")
+names(WRB_Qual_2006) <- c("Qual_name_en", "Qual_name_sp", "Qual_code")
+
+LPKS_WRB_FAO90_Tax <- read.csv("C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/Mexico/LPKS_WRB_FAO90_Tax.csv", header=T)
+WRB_Qual_2006[which(!WRB_Qual_2006$Qual_name_en %in% LPKS_WRB_FAO90_Tax$Qual),]
+WRB_Qual_2006[which(!WRB_Qual_2006$Qual_name_en %in% LPKS_WRB_FAO90_Tax$Qual),]
+# Used code to manually edit xlsx lookup table
+# WRB_Qual_2006_missing <- read.xlsx("C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/Mexico/WRB_qualifiers_specifiers_2006_missing.xlsx")
+# names(WRB_Qual_2006_missing) <- c("Qual_name_sp1", "Qual_name_sp2")
+# WRB_Qual_2006_missing <- WRB_Qual_2006_missing %>% mutate(Qual_name_sp2 = str_to_title(Qual_name_sp2))
+# WRB_Qual_2006_missing <- WRB_Qual_2006_missing %>% left_join(WRB_Qual_2006, by=c("Qual_name_sp2"="Qual_name_sp"))
+
+
+
+
+```
+
+
+# Processing of Mexico Pedon dataset #2 (perfiles_serieii)
+```{r}
+pedon2_wrb <- mexico_pedon2  %>% dplyr::select(GPO_SUELO,  CALIF_PRIM, CALIF_SEC)
+st_geometry(pedon2_wrb) <- NULL
+pedon2_wrb <- pedon2_wrb %>% mutate(CALIF_PRIM=as.character(CALIF_PRIM))
+pedon2_wrb <- pedon2_wrb %>% mutate(CALIF_PRIM=ifelse(CALIF_PRIM == "Síltico", "Límico", CALIF_PRIM))
+pedon2_wrb <- pedon2_wrb %>% mutate(GPO_SUELO = str_to_title(GPO_SUELO))
+pedon2_wrb <- pedon2_wrb %>% left_join(WRB_RSG_2006, by=c("GPO_SUELO"="RSG_name_sp")) 
+pedon2_wrb <- pedon2_wrb %>% left_join(WRB_Qual_2006, by=c("CALIF_PRIM"="Qual_name_sp"))
+ 
+pedon2_wrb <- pedon2_wrb %>% mutate(WRB_2006 = str_c(Qual_name_en, RSG_name_en, sep=" "))
+
+LPKS_WRB_FAO90_Tax$WRB_tax <- str_sub(LPKS_WRB_FAO90_Tax$WRB_tax, start = 1, end = -2)
+
+missing <- pedon2_wrb[which(!pedon2_wrb$WRB_2006 %in% LPKS_WRB_FAO90_Tax$WRB_tax),]
+
+
+mexico_pedon2$WRB_2006 <- pedon2_wrb$WRB_2006
+
+pedon2_id <- str_split_fixed(mexico_pedon2$ID_PERFIL, "-", 2)
+mexico_pedon2_sub <- mexico_pedon2  %>% dplyr::mutate(FAO="FAO90?", HONU=as.numeric(pedon2_id[,2]), ID=as.numeric(pedon2_id[,1])) %>% dplyr::select(ID, FAO, FAO_Code=CLAVE_WRB, HONU, HzName=NOMEN_HTE, TOPDEP=LIM_SUP, BOTDEP=LIM_INF, Clay=R, Silt=L, Sand=A, rf=F_RúDICA, ColorD = COL_SECO_L, ColorM = COL_HUM_L, Color_FieldM=COL_CAMPO, ORGC=CO, WRB_2006, geometry)
+
+
+
+
+
+
+mexico_pedons <- mexico_pedon1_sub  %>% dplyr::select(ID, FAO, FAO_Code, HONU, HzName, TOPDEP, BOTDEP, Clay, Silt, Sand, ColorD, ColorM,  ORGC, geometry)
+
+```
+

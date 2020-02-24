@@ -1,0 +1,265 @@
+---
+title){ "KSSL-NASIS SoilID Test Dataset"
+output){ html_notebook
+---
+
+### This script loads & filters KSSL-NASIS pedon data that was processed using the 'KSSL_processing.Rmd' script. 
+```{r}
+library(sf)
+library(dplyr)
+library(magrittr)
+library(stringr)
+library(rmarkdown)
+library(knitr)
+library(tidyr)
+library(sp)
+library(rgdal)
+library(plyr)
+library(raster)
+library(rgeos)
+library(soilDB)
+library(utils)
+library(iterators)
+library(colorspace)
+library(aqp)
+library(doParallel)
+library(tcltk)
+cores<-detectCores()
+cluster <- makeCluster(cores[1]-1, type='SOCK', outfile="")
+registerDoParallel(cluster)
+getDoParWorkers()
+options(stringsAsFactors = FALSE)
+#stopCluster(cluster)
+```
+
+```{r}
+#Load NCSS-NASIS horizon data
+NCSS.NASIS.pedon <- readRDS("R:\\ARS_Data\\Research_Projects\\LandPKS\\Soil_Pedon_Databases\\KSSL\\NCSS_pedon_color.rds")
+NCSS.NASIS.site <- readRDS("R:\\ARS_Data\\Research_Projects\\LandPKS\\Soil_Pedon_Databases\\KSSL\\NCSS_NASIS_site.rds")
+
+# Add slope to pedon database so we can remove pedons with missing data
+NCSS.NASIS.pedon <- NCSS.NASIS.pedon %>% left_join(NCSS.NASIS.site %>% dplyr::select(pedon_key, slope), by="pedon_key")
+
+#Filter out pedons with missing data
+KSSL_SoilID_pedonKey <- NCSS.NASIS.pedon %>% group_by(pedon_key) %>% filter(!any(is.na(frags))) %>% filter(!any(is.na(slope))) %>% filter(!any(is.na(dry_soil_color))) %>% filter(!any(is.na(sand)) & !any(is.na(silt)) & !any(is.na(clay))) %>% ungroup() %>% dplyr::select(pedon_key) %>% distinct() %>% pull()
+
+#Filter site data & select x,y, taxonname
+NCSS.NASIS.SoilID <- NCSS.NASIS.site %>% filter(pedon_key %in% KSSL_SoilID_pedonKey) %>% dplyr::select(x,y,taxonname)
+```
+
+# Query final database against SSURGO SDA to find spatial matches
+```{r}
+### This code can take awhile to run. Skip this & load in the NASIS_pedon_USA_ssurgo_match.rds file dropbox
+KSSL_NASIS_SSURGO_match <- list()
+n <- nrow(NCSS.NASIS.SoilID)
+pb <- txtProgressBar(min = 1, max = n, style=3)
+
+#Returns 1 if there is a match & 0 if no match
+stime <- system.time({
+KSSL_NASIS_SSURGO_match <- foreach(i=1:nrow(NCSS.NASIS.SoilID), .packages = c("magrittr", "aqp", "soilDB", "dplyr", "tidyr", "plyr", "rgeos", "raster", "rgdal", "stringr")) %dopar% {
+    setTxtProgressBar(pb, i)
+    tryCatch({
+        # the query point is in geographic coordinates with WGS84 datum
+        p <- SpatialPoints(cbind(NCSS.NASIS.SoilID$x[i], NCSS.NASIS.SoilID$y[i]), proj4string = CRS('+proj=longlat +datum=WGS84'))
+        # transform to planar coordinate system for buffering
+        p.aea <- spTransform(p, CRS('+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=m +no_defs '))
+        # create 1000 meter buffer
+        p.aea <- gBuffer(p.aea, width = 1000)
+        # transform back to WGS84 GCS
+        p.buff <- spTransform(p.aea, CRS('+proj=longlat +datum=WGS84'))
+        # convert to WKT
+        p.wkt <- writeWKT(p.buff)
+
+        q <- paste0("SELECT mukey, cokey, compname
+        FROM component
+        WHERE mukey IN (
+        SELECT * from SDA_Get_Mukey_from_intersection_with_WktWgs84('", p.wkt, "')
+        )")
+
+        res <- SDA_query(q)
+        if((NCSS.NASIS.SoilID$taxonname[i] %>% str_to_lower()) %in% (res$compname %>% str_to_lower())){
+          KSSL_NASIS_SSURGO_match[i] <- 1
+        }else{
+          KSSL_NASIS_SSURGO_match[i] <- 0
+        }
+    }, error=function(e){cat("ERROR ){",conditionMessage(e), "\n")})
+}
+close(pb)
+})[3]
+stime
+
+KSSL_NASIS_SSURGO_match[sapply(KSSL_NASIS_SSURGO_match, is.null)] <- NA
+#KSSL_NASIS_SSURGO_match_list <- unlist(KSSL_NASIS_SSURGO_match)
+
+#59% match
+KSSL_NASIS_SSURGO_match_list_250 
+sum(KSSL_NASIS_SSURGO_match_list_250, na.rm = TRUE)/length(KSSL_NASIS_SSURGO_match_list_250)
+
+#61% match
+KSSL_NASIS_SSURGO_match_list_500
+sum(KSSL_NASIS_SSURGO_match_list_500, na.rm = TRUE)/length(KSSL_NASIS_SSURGO_match_list_500)
+
+#64% match
+KSSL_NASIS_SSURGO_match_list_1000 <- unlist(KSSL_NASIS_SSURGO_match)
+sum(KSSL_NASIS_SSURGO_match_list_1000, na.rm = TRUE)/length(KSSL_NASIS_SSURGO_match_list_1000)
+
+KSSL_SoilID_pedonKey_match <- KSSL_SoilID_pedonKey[which(KSSL_NASIS_SSURGO_match_list_1000==1)]
+
+NCSS.NASIS.pedon.match <- NCSS.NASIS.pedon %>% filter(pedon_key %in% KSSL_SoilID_pedonKey_match)
+NCSS.NASIS.site.match <- NCSS.NASIS.site %>% filter(pedon_key %in% KSSL_SoilID_pedonKey_match)
+
+US_SoilID_KSSL <- NCSS.NASIS.pedon.match %>% left_join(NCSS.NASIS.site.match %>% dplyr::select(pedon_key,pedlabsampnum, peiid,  elev, bedrckdepth, taxonname, taxclname, taxonkind, pedontype, startdate, recentdate , th_classdate_1, th_classdate_2, th_classdate_3, th_classdate_4, th_classdate_5, th_taxonname_1, th_taxonname_2, th_taxonname_3, th_taxonname_4, th_taxonname_5, taxsubgroup, x, y,  taxorder, taxsuborder, taxgrtgroup, taxsubgroup, taxpartsize, taxpartsizemod, taxceactcl, taxreaction, taxtempcl, taxmoistscl, taxtempregime), by="pedon_key")
+```
+
+```{r}
+US_SoilID_KSSL$munsell <- paste0(US_SoilID_KSSL$d_hue, " ", US_SoilID_KSSL$d_value, "/", US_SoilID_KSSL$d_chroma)
+for(i in 1:nrow(US_SoilID_KSSL))  {
+  Lab <- as(with(parseMunsell(US_SoilID_KSSL$munsell[i], return_triplets=TRUE), sRGB(r,g,b)), 'LAB')@coords
+  US_SoilID_KSSL$L[i] <- Lab[[1,1]]
+  US_SoilID_KSSL$a[i] <- Lab[[1,2]]
+  US_SoilID_KSSL$b[i] <- Lab[[1,3]]
+}
+
+gettt <- function(sand, silt, clay){
+        if(is.na(sand) | is.na(silt) | is.na(clay)){
+            x = NA
+        } else if((silt + 1.5 * clay) < 15){
+            x = "Sand"
+        } else if((silt + 1.5 * clay) >= 15 & (silt + 2.0 * clay) < 30){
+            x = "Loamy sand"
+        } else if((clay >= 7) & (clay <= 20) & (sand > 52) & ((silt + 2.0 * clay) >= 30)){
+            x = "Sandy loam"
+        } else if((clay < 7) & (silt < 50) & ((silt + 2.0 * clay) >= 30)){
+            x = "Sandy loam"
+        } else if((clay >= 7) & (clay <= 27) & (silt >= 28) & (silt < 50) & (sand <= 52)){
+            x = "Loam"
+        } else if(((silt >= 50) & (clay >= 12) & (clay < 27)) | ((silt >= 50) & (silt < 80) & (clay < 12))){
+            x = "Silt loam"
+        } else if((silt >= 80) & (clay < 12)){
+            x = "Silt"
+        } else if((clay >= 20) & (clay < 35) & (silt < 28) & (sand > 45)){
+            x = "Sandy clay loam"
+        } else if((clay >= 27) & (clay < 40) & (sand > 20) & (sand <= 45)){
+            x = "Clay loam"
+        } else if((clay >= 27) & (clay < 40) & (sand <= 20)){
+            x = "Silty clay loam"
+        } else if((clay >= 35) & (sand >= 45)){
+            x = "Sandy clay"
+        } else if((clay >= 40) & (silt >= 40)){
+            x = "Silty clay"
+        } else if((clay >= 40) & (sand <= 45) & (silt < 40)){
+            x = "Clay"
+        }
+        return(x)
+    }
+
+getCF_groups <- function(cf){
+    if(is.na(cf)){
+        cf_g <-  NA
+    }else if(cf >= 0 & cf < 2){
+        cf_g <-  "0-1%"
+    }else if( cf >=2 & cf < 16){
+        cf_g <-  "1-15%"
+    }else if(cf >= 16 & cf < 36){
+        cf_g <-  "15-35%"
+    }else if(cf >= 36 & cf < 61){
+        cf_g <-  "35-60%"
+    }else if(cf >= 61){
+        cf_g <-  ">60%"
+    }
+    return(cf_g)
+}
+
+for(i in 1:nrow(US_SoilID_KSSL))  {
+  US_SoilID_KSSL$textclass[i] <- gettt(US_SoilID_KSSL$sand[i], US_SoilID_KSSL$silt[i], US_SoilID_KSSL$clay[i])
+}
+
+for(i in 1:nrow(US_SoilID_KSSL))  {
+  US_SoilID_KSSL$fragvoltot[i] <- getCF_groups(US_SoilID_KSSL$frags[i])
+}
+
+# US_SoilID_KSSL <- US_SoilID_KSSL %>% dplyr::select(pedon_key, hzdept = hzn_top, hzdepb = hzn_bot, textclass, fragvoltot, resdept = bedrckdepth, lat = y, lon = x, slope, L, a, b, taxonname, taxonkind, pedontype, taxorder, taxsubgroup, taxclname, startdate, recentdate , th_classdate_1, th_classdate_2, th_classdate_3, th_classdate_4, th_classdate_5, th_taxonname_1, th_taxonname_2, th_taxonname_3, th_taxonname_4, th_taxonname_5)
+
+#Filter out pedons with missing horizons
+# test for missing horizon depths OR overlapping horizons
+missing_hrz <- ddply(US_SoilID_KSSL, 'pedon_key', test_hz_logic, topcol='hzn_top', bottomcol='hzn_bot')
+bad_pedon_key <- missing_hrz[which(missing_hrz$hz_logic_pass==FALSE),]$pedon_key 
+
+US_SoilID_KSSL <- US_SoilID_KSSL %>% filter(!pedon_key %in% bad_pedon_key)
+pedon_key_top <- US_SoilID_KSSL %>% group_by(pedon_key) %>% dplyr::select(pedon_key, hzn_top) %>% filter(hzn_top == min(hzn_top))
+pedon_noTop <- pedon_key_top[which(pedon_key_top$hzn_top != 0),]$pedon_key
+US_SoilID_KSSL <- US_SoilID_KSSL %>% filter(!pedon_key %in% pedon_noTop)
+US_SoilID_KSSL <- US_SoilID_KSSL %>% dplyr::rename(hzdept = hzn_top, hzdepb = hzn_bot, rfv = frags)
+
+#Additional filter based on slab output where additional missing horizions were detected
+US_SoilID_KSSL <- US_SoilID_KSSL %>% filter(pedon_key %in% KSSL_pedon_key_filter)
+
+saveRDS(US_SoilID_KSSL, "R:\\ARS_Data\\Research_Projects\\LandPKS\\Soil_Pedon_Databases\\KSSL\\US_SoilID_KSSL.rds")
+```
+
+## Create pedon database with LandPKS depth intervals
+```{r}
+US_SoilID_KSSL_LPKS <- US_SoilID_KSSL
+US_SoilID_KSSL_LPKS_pedon <-  US_SoilID_KSSL_LPKS %>% dplyr::select(pedon_key, hzdept, hzdepb, hzn_desgn, hzn_desgn_old, lab_texture_class, sand, silt, clay, co3_cly, silt_f_psa, silt_c_psa, vfs, fs, ms, cs, vcs, acid_tea, base_sum, al_kcl, cec7, cec82, ecec, al_sat, bs82, bs7, ex_ca, ex_mg, ex_na, ex_k, ph_h2o, ph_cacl2, ph_kcl, ph_sp, ph_ox, gypl20, caco3, ec_12pre, sar, oc, c_tot, n_tot, whc, w3cld, w15l2, w15cly, cec7_cly, rfv, wrd_l2, Ks, Ko, Lpar, ex_k_saturation, estimated_oc, estimated_om, estimated_c_to_n, estimated_ph_h2o, L, a, b)
+
+
+
+#modify depth intervals to match LandPKS depths
+depths(US_SoilID_KSSL_LPKS_pedon) <- pedon_key  ~ hzdept + hzdepb
+
+mean_na <- function(x){
+  x_mean <- mean(x, na.rm=TRUE)
+  return(x_mean)
+}
+
+KSSL_LPKS_slab <- slab(US_SoilID_KSSL_LPKS_pedon, fm =pedon_key ~ sand + clay + silt + rfv + L + a + b, slab.structure=c(0,1,10,20,50,70,100,120), slab.fun=mean_na, strict=TRUE)
+
+KSSL_LPKS_slab <- KSSL_LPKS_slab %>% dplyr::select(-c(contributing_fraction)) %>% spread(variable, value)
+KSSL_LPKS_slab[ is.na(KSSL_LPKS_slab) ] <- NA
+max_depth <- KSSL_LPKS_slab %>% group_by(pedon_key) %>% filter(!is.na(sand) | !is.na(clay) | !is.na(silt) | !is.na(L)| !is.na(a)| !is.na(b)) %>% dplyr::select(bottom) %>% filter(bottom == max(bottom)) 
+KSSL_LPKS_list <- list(list())
+for(i in 1:nrow(max_depth)){
+  KSSL_LPKS_list[[i]] <- KSSL_LPKS_slab %>% filter(pedon_key==max_depth$pedon_key[i]) %>% filter(bottom <= max_depth$bottom[i])
+}
+KSSL_LPKS_slab <-  bind_rows(KSSL_LPKS_list)
+KSSL_LPKS_slab <-  KSSL_LPKS_slab %>% mutate(pedon_key = pedon_key %>% as.numeric())
+
+for(i in 1:nrow(KSSL_LPKS_slab))  {
+  KSSL_LPKS_slab$textclass[i] <- gettt(KSSL_LPKS_slab$sand[i], KSSL_LPKS_slab$silt[i], KSSL_LPKS_slab$clay[i])
+}
+
+for(i in 1:nrow(KSSL_LPKS_slab))  {
+  KSSL_LPKS_slab$fragvoltot[i] <- getCF_groups(KSSL_LPKS_slab$rfv[i])
+}
+
+
+KSSL_LPKS_slab <- KSSL_LPKS_slab %>% group_by(pedon_key) %>% filter(!any(is.na(sand))) %>% filter(!any(is.na(rfv))) %>% filter(!any(is.na(L))) %>% ungroup()
+
+#Site variables
+US_SoilID_KSSL_LPKS_site <-  US_SoilID_KSSL_LPKS %>% dplyr::select(pedon_key, pedlabsampnum, peiid, slope, elev, bedrckdepth, taxonname, taxclname, taxonkind, pedontype, startdate, recentdate , th_classdate_1, th_classdate_2, th_classdate_3, th_classdate_4, th_classdate_5, th_taxonname_1, th_taxonname_2, th_taxonname_3, th_taxonname_4, th_taxonname_5, taxsubgroup, x, y, taxorder, taxsuborder, taxgrtgroup, taxsubgroup, taxpartsize, taxpartsizemod, taxceactcl, taxreaction, taxtempcl, taxmoistscl, taxtempregime) %>% distinct()
+
+US_SoilID_KSSL_LPKS <- KSSL_LPKS_slab %>% left_join(US_SoilID_KSSL_LPKS_site, by="pedon_key")
+US_SoilID_KSSL_LPKS <- US_SoilID_KSSL_LPKS %>% group_by(pedon_key) %>% filter(!any(is.na(slope))) %>% ungroup()
+KSSL_pedon_key_filter <- unique(US_SoilID_KSSL_LPKS$pedon_key)
+
+
+saveRDS(US_SoilID_KSSL_LPKS, "R:\\ARS_Data\\Research_Projects\\LandPKS\\Soil_Pedon_Databases\\KSSL\\US_SoilID_KSSL_LPKS.rds")
+
+```
+
+#Create dataframe of diagnostic features
+```{r}
+#load in diagostic feature table from NASIS
+pediagfeatures <-  read.csv('R:/NASIS_APRIL_2017/CSV_files/pediagfeatures.csv', sep="|", header=T)
+US_SoilID_KSSL_diagft <- pediagfeatures %>% filter(peiidref %in% US_SoilID_KSSL_LPKS$peiid) %>% left_join(US_SoilID_KSSL %>% dplyr::select(pedon_key, peiid), by=c("peiidref"="peiid"))
+
+saveRDS(US_SoilID_KSSL_diagft, "R:\\ARS_Data\\Research_Projects\\LandPKS\\Soil_Pedon_Databases\\KSSL\\US_SoilID_KSSL_diagft.rds")
+
+```
+
+
+```{r}
+save.image('R:\\ARS_Data\\Research_Projects\\LandPKS\\Soil_Pedon_Databases\\KSSL\\KSSL_NASIS_SoilID_Pedons.RData')
+load('R:\\ARS_Data\\Research_Projects\\LandPKS\\Soil_Pedon_Databases\\KSSL\\KSSL_NASIS_SoilID_Pedons.RData')
+```
+

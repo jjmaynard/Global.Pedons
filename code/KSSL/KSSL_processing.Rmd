@@ -1,0 +1,605 @@
+---
+title: "KSSL + NASIS Data Processing"
+output:
+  html_notebook: default
+  word_document: default
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+
+### This script processes the KSSL NCSS SCD and NASIS pedon data to create a combined pedon database with both morphology and soil chemical data. The code is slightly modified from the script developed by Dylan Beaudette (https://github.com/dylanbeaudette/process-kssl-snapshot).
+```{r}
+library(soilDB)
+library(aqp)
+library(stringi)
+library(rvest)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(lubridate)
+library(stringr)
+library(tidyverse)
+library(sf)
+library(colorspace)
+
+```
+
+
+##Load in data tables from NCSS SCD
+```{r}
+KSSL_layers <- st_layers(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb")
+                      
+# OLD SCHEMA
+# Driver: OpenFileGDB 
+# Available layers:
+#                                                 layer_name geometry_type features fields
+# 1                                    Trace_Elements_Tier_2            NA     8414     14
+# 2                                    Trace_Elements_Tier_1            NA     8973     14
+# 3                                            Water_Content            NA    71020     21
+# 4                                     Supplementary_Tier_4            NA   726256     24
+# 5                                     Supplementary_Tier_3            NA   324591     29
+# 6                                     Supplementary_Tier_2            NA   230966     29
+# 7                                     Supplementary_Tier_1            NA   189097     26
+# 8                                  PSDA_and_Rock_Fragments            NA   369998     21
+# 9                                               Phosphorus            NA    80801     13
+# 10                                       pH_and_Carbonates            NA   371036     15
+# 11                                                 Organic            NA     4946     20
+# 12                                            NCSS_Project            NA     5539      4
+# 13                                         NCSS_Pedon_Calc            NA    20929     10
+# 14                                              NCSS_Layer            NA   404080     22
+# 15                          NCSS_Data_Dictionary_Data_Tier            NA     1844     12
+# 16 NCSS_Data_Dictionary_Layer_Pedon_Taxonomy_Site_Location            NA      119      4
+# 17                                            NCSS_Analyte            NA     2049     13
+# 18                                      Miscellaneous_Data            NA    14772     18
+# 19                                         Mineralogy_Xray            NA    45875     61
+# 20                                      Mineralogy_Thermal            NA     9022     15
+# 21                                        Mineralogy_Petro            NA    20776    175
+# 22                                        Mineralogy_Glass            NA    13826     19
+# 23                                          Major_Elements            NA    10678     15
+# 24                                           Data_Elements            NA        0     12
+# 25                                           CEC_and_Bases            NA   306540     22
+# 26                               Bulk_Density_and_Moisture            NA   319786     17
+# 27                                   Andic_Soil_Properties            NA    12673     42
+# 28                                                    Salt            NA    95276     23
+# 29                                     NCSS_Pedon_Taxonomy            NA    64732     67
+# 30                                        NCSS_Preparation            NA       18      4
+# 31                                 NCSS_Analysis_Procedure            NA      629      8
+# 32                                  Carbon_and_Extractions            NA   341671     37
+# 33                                      Rosetta_Parameters            NA    79326      9
+# 34                                      NCSS_Site_Location         Point    64504     23
+
+Trace_Elements_Tier_2  <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb", layer=KSSL_layers[[1]][1])                                 
+Trace_Elements_Tier_1  <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb", layer=KSSL_layers[[1]][2])                                
+Water_Content  <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb", layer=KSSL_layers[[1]][3])                                         
+Supplementary_Tier_4   <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb", layer=KSSL_layers[[1]][4])                                
+Supplementary_Tier_3  <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb", layer=KSSL_layers[[1]][5])                                  
+Supplementary_Tier_2  <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb", layer=KSSL_layers[[1]][6])                                 
+Supplementary_Tier_1   <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb", layer=KSSL_layers[[1]][7])                                 
+PSDA_and_Rock_Fragments   <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb", layer=KSSL_layers[[1]][8])                             
+Phosphorus  <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb", layer=KSSL_layers[[1]][9])                                            
+pH_and_Carbonates  <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb", layer=KSSL_layers[[1]][10])                                    
+Organic  <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb", layer=KSSL_layers[[1]][11])                                              
+NCSS_Project  <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb", layer=KSSL_layers[[1]][12])                                         
+NCSS_Pedon_Calc  <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb", layer=KSSL_layers[[1]][13])                                      
+NCSS_Layer  <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb", layer=KSSL_layers[[1]][14])                                           
+NCSS_Data_Dictionary_Data_Tier  <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb", layer=KSSL_layers[[1]][15])                        
+NCSS_Data_Dictionary_Layer_Pedon_Taxonomy_Site_Location <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb", layer=KSSL_layers[[1]][16])
+NCSS_Analyte  <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb", layer=KSSL_layers[[1]][17])                                         
+Miscellaneous_Data   <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb", layer=KSSL_layers[[1]][18])                                  
+Mineralogy_Xray  <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb", layer=KSSL_layers[[1]][19])                                      
+Mineralogy_Thermal  <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb", layer=KSSL_layers[[1]][20])                                   
+Mineralogy_Petro  <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb", layer=KSSL_layers[[1]][21])                                     
+Mineralogy_Glass  <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb", layer=KSSL_layers[[1]][22])                                     
+Major_Elements  <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb", layer=KSSL_layers[[1]][23])                                       
+Data_Elements  <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb", layer=KSSL_layers[[1]][24])                                        
+CEC_and_Bases  <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb", layer=KSSL_layers[[1]][25])                                        
+Bulk_Density_and_Moisture   <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb", layer=KSSL_layers[[1]][26])                           
+Andic_Soil_Properties  <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb", layer=KSSL_layers[[1]][27])                                
+Salt  <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb", layer=KSSL_layers[[1]][28])                                                 
+NCSS_Pedon_Taxonomy  <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb", layer=KSSL_layers[[1]][29])                                  
+NCSS_Preparation  <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb", layer=KSSL_layers[[1]][30])                                     
+NCSS_Analysis_Procedure  <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb", layer=KSSL_layers[[1]][31])                              
+Carbon_and_Extractions <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb", layer=KSSL_layers[[1]][32])                                
+Rosetta_Parameters  <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb", layer=KSSL_layers[[1]][33])                                   
+NCSS_Site_Location <- st_read(dsn="C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Soil_Characterization_Database/NCSS_Soil_Characterization_Database_09_14_2018.gdb", layer=KSSL_layers[[1]][34])
+#-------------------------------------------------------------------------------------------------------
+```
+
+#remove multiple results for single sample
+```{r}
+Carbon_and_Extractions_mult <- Carbon_and_Extractions %>% filter(labsampnum %in% Carbon_and_Extractions[which(duplicated(Carbon_and_Extractions$labsampnum)),]$labsampnum)
+Carbon_and_Extractions_sub <- Carbon_and_Extractions %>% filter(!labsampnum %in% Carbon_and_Extractions[which(duplicated(Carbon_and_Extractions$labsampnum)),]$labsampnum)
+Carbon_and_Extractions_agg <- Carbon_and_Extractions_mult %>% group_by(labsampnum) %>% summarise_each(funs(if(is.numeric(.)) mean(., na.rm = TRUE) else first(.))) %>% ungroup() %>% replace(is.na(.), NA) %>% distinct()
+Carbon_and_Extractions_sub <- Carbon_and_Extractions_sub %>% bind_rows(Carbon_and_Extractions_agg) %>% distinct()
+
+pH_and_Carbonates_mult <- pH_and_Carbonates %>% filter(labsampnum %in% pH_and_Carbonates[which(duplicated(pH_and_Carbonates$labsampnum)),]$labsampnum)
+pH_and_Carbonates_sub <- pH_and_Carbonates %>% filter(!labsampnum %in% pH_and_Carbonates[which(duplicated(pH_and_Carbonates$labsampnum)),]$labsampnum)
+pH_and_Carbonates_agg <- pH_and_Carbonates_mult %>% group_by(labsampnum) %>% summarise_each(funs(if(is.numeric(.)) mean(., na.rm = TRUE) else first(.))) %>% ungroup() %>% replace(is.na(.), NA) %>% distinct()
+pH_and_Carbonates_sub <- pH_and_Carbonates_sub %>% bind_rows(pH_and_Carbonates_agg) %>% distinct()
+
+PSDA_and_Rock_Fragments_mult <- PSDA_and_Rock_Fragments %>% filter(labsampnum %in% PSDA_and_Rock_Fragments[which(duplicated(PSDA_and_Rock_Fragments$labsampnum)),]$labsampnum)
+PSDA_and_Rock_Fragments_sub <- PSDA_and_Rock_Fragments %>% filter(!labsampnum %in% PSDA_and_Rock_Fragments[which(duplicated(PSDA_and_Rock_Fragments$labsampnum)),]$labsampnum)
+PSDA_and_Rock_Fragments_agg <- PSDA_and_Rock_Fragments_mult %>% group_by(labsampnum) %>% summarise_each(funs(if(is.numeric(.)) mean(., na.rm = TRUE) else dplyr::last(.))) %>% ungroup() %>% replace(is.na(.), NA) %>% distinct()
+PSDA_and_Rock_Fragments_sub <- PSDA_and_Rock_Fragments_sub %>% bind_rows(PSDA_and_Rock_Fragments_agg) %>% distinct()
+
+Phosphorus_mult <- Phosphorus %>% filter(labsampnum %in% Phosphorus[which(duplicated(Phosphorus$labsampnum)),]$labsampnum)
+Phosphorus_sub <- Phosphorus %>% filter(!labsampnum %in% Phosphorus[which(duplicated(Phosphorus$labsampnum)),]$labsampnum)
+Phosphorus_agg <- Phosphorus_mult %>% group_by(labsampnum) %>% summarise_each(funs(if(is.numeric(.)) mean(., na.rm = TRUE) else first(.))) %>% ungroup() %>% replace(is.na(.), NA) %>% distinct()
+Phosphorus_sub <- Phosphorus_sub %>% bind_rows(Phosphorus_agg) %>% distinct()
+
+CEC_and_Bases_mult <- CEC_and_Bases %>% filter(labsampnum %in% CEC_and_Bases[which(duplicated(CEC_and_Bases$labsampnum)),]$labsampnum)
+CEC_and_Bases_sub <- CEC_and_Bases %>% filter(!labsampnum %in% CEC_and_Bases[which(duplicated(CEC_and_Bases$labsampnum)),]$labsampnum)
+CEC_and_Bases_agg <- CEC_and_Bases_mult %>% group_by(labsampnum) %>% summarise_each(funs(if(is.numeric(.)) mean(., na.rm = TRUE) else first(.))) %>% ungroup() %>% replace(is.na(.), NA) %>% distinct()
+CEC_and_Bases_sub <- CEC_and_Bases_sub %>% bind_rows(CEC_and_Bases_agg) %>% distinct()
+
+Salt_mult <- Salt %>% filter(labsampnum %in% Salt[which(duplicated(Salt$labsampnum)),]$labsampnum)
+Salt_sub <- Salt %>% filter(!labsampnum %in% Salt[which(duplicated(Salt$labsampnum)),]$labsampnum)
+Salt_agg <- Salt_mult %>% group_by(labsampnum) %>% summarise_each(funs(if(is.numeric(.)) mean(., na.rm = TRUE) else first(.))) %>% ungroup() %>% replace(is.na(.), NA) %>% distinct()
+Salt_sub <- Salt_sub %>% bind_rows(Salt_agg) %>% distinct()
+```
+
+
+```{r}
+NCSS_hz <- NCSS_Pedon_Taxonomy %>% 
+              left_join(NCSS_Layer %>% 
+              left_join(CEC_and_Bases_sub, by = "labsampnum")  %>% 
+              left_join(PSDA_and_Rock_Fragments_sub, by = "labsampnum")  %>%
+              left_join(Carbon_and_Extractions_sub, by = "labsampnum")  %>%
+              left_join(pH_and_Carbonates_sub, by = "labsampnum")  %>%
+              left_join(Bulk_Density_and_Moisture %>% filter(prep_code=='s'), by = "labsampnum")  %>%
+              left_join(Supplementary_Tier_3 %>% select(wrd_l2, labsampnum) %>% distinct(), by = "labsampnum")  %>%
+              left_join(Salt_sub, by = "labsampnum")  %>%
+              left_join(Phosphorus_sub, by = "labsampnum")  %>%
+              left_join(Rosetta_Parameters, by = "labsampnum"), by = "pedon_key") %>% 
+              select(pedon_key, labsampnum, layer_sequence, hzn_top, hzn_bot, hzn_desgn, hzn_desgn_old, tex_psda , sand_tot_psa, silt_tot_psa, clay_tot_psa, co3_cly, silt_f_psa, silt_c_psa, sand_vf_psa, sand_f_psa, sand_m_psa, sand_c_psa, sand_vc_psa, 
+acid_tea, base_sum, al_kcl, cec_nh4, cec_sum, ecec, al_sat, bsecat, bsesat, ca_nh4, mg_nh4, na_nh4, k_nh4, ph_h2o, ph_cacl2, ph_kcl, ph_sp, ph_ox, gypl20, caco3, ec_12pre, sar, oc, c_tot, n_tot, fe_dith, fe_ox, al_dith, al_ox,
+p_olsn, p_nz, db_13b, db_od, COLEws, wrd_ws13, w3cld, w15l2, w15cly, cec7_cly, wpg2, wrd_l2,
+theta_r, theta_s, alpha, npar, Ks, Ko, Lpar)  %>% 
+              rename(lab_texture_class = tex_psda , sand = sand_tot_psa, silt = silt_tot_psa, clay = clay_tot_psa, 
+vfs = sand_vf_psa, fs = sand_f_psa, ms = sand_m_psa, cs = sand_c_psa, vcs = sand_vc_psa, 
+cec7 = cec_nh4, cec82 = cec_sum, bs82 = bsecat, bs7 = bsesat,
+ex_ca = ca_nh4, ex_mg = mg_nh4, ex_na = na_nh4, ex_k = k_nh4, whc = wrd_ws13, frags = wpg2)  %>% 
+              distinct()  %>% 
+              arrange(pedon_key, hzn_top)  %>% 
+              filter(!is.na(labsampnum))
+              
+```
+
+
+```{r}
+#-----------------------------Cleanup steps
+
+## 2. horizonation fixes
+# fix missing lower hz boundaries with (top + 1)
+idx <- which(!is.na(NCSS_hz$hzn_top) & is.na(NCSS_hz$hzn_bot))
+NCSS_hz$hzn_bot[idx] <- NCSS_hz$hzn_top[idx] + 1
+# remove O horizons where top > bottom
+bad.O.hz.idx <- which(NCSS_hz$hzn_top > NCSS_hz$hzn_bot)
+if(length(bad.O.hz.idx) > 0)
+  NCSS_hz <- NCSS_hz[-bad.O.hz.idx, ]
+
+## 4. Estimated values: prefix with "estimated"
+# Double-check these !
+
+# compute ex-K saturation
+NCSS_hz$ex_k_saturation <- NCSS_hz$ex_k / NCSS_hz$base_sum
+
+# relace "0" total C and N
+NCSS_hz$c_tot[which(NCSS_hz$c_tot == 0)] <- NA
+NCSS_hz$n_tot[which(NCSS_hz$n_tot == 0)] <- NA
+
+# organic matter and organic carbon
+NCSS_hz$estimated_oc <- with(NCSS_hz, ifelse(is.na(oc), c_tot - (ifelse(is.na(caco3), 0, caco3) * 0.12), oc))
+NCSS_hz$estimated_om <- with(NCSS_hz, estimated_oc * 1.724 )
+
+# estimate C:N 
+NCSS_hz$estimated_c_to_n <- NCSS_hz$estimated_oc / NCSS_hz$n_tot
+
+
+# fill pH 1:1 with saturated paste pH when missing
+png(file='C:/Users/jmaynard/Documents/ph-1-to-1-water-vs-sat-paste.png', width=600, height=600)
+print(hexbin::hexbinplot(ph_h2o ~ ph_sp, data=NCSS_hz, asp=1, main='All Pedons', xlab='pH by saturated paste', ylab='pH by 1:1 H2O', xlim=c(1, 13), ylim=c(1, 13), trans=log, inv=exp) + latticeExtra::layer(panel.abline(0, 1, col='red', lwd=2, lty=2)))
+dev.off()
+(l.ph <- rms::ols(ph_h2o ~ rms::rcs(ph_sp), data=NCSS_hz, x=TRUE, y=TRUE, subset=ph_h2o >= 0 & ph_h2o <= 14))
+anova(l.ph)
+
+NCSS_hz$estimated_ph_h2o <- NCSS_hz$ph_h2o 
+idx <- which(is.na(NCSS_hz$ph_h2o))
+NCSS_hz$estimated_ph_h2o[idx] <- predict(l.ph, NCSS_hz[idx, ])
+
+NCSS_hz$estimated_ph_h2o[which(NCSS_hz$estimated_ph_h2o < 0)] <- NA
+NCSS_hz$estimated_ph_h2o[which(NCSS_hz$estimated_ph_h2o > 14)] <- NA
+
+png(file='C:/Users/jmaynard/Documents/ph-1-to-1-water-vs-sat-paste-predictions.png', width=600, height=600)
+print(hexbin::hexbinplot(ph_h2o ~ estimated_ph_h2o, data=NCSS_hz, main='All Pedons', ylab='measured pH by 1:1 H2O', xlab='predicted pH by 1:1 H2O', xlim=c(1, 13), ylim=c(1, 13), asp=1, trans=log, inv=exp) + latticeExtra::layer(panel.abline(0, 1, col='red', lwd=2, lty=2)))
+dev.off()
+
+# re-calculate BS82 when missing, but ex-cations and ex-acid are available
+
+# BS82 can be computed in some cases when missing but ex-cations and ex-acidity are present
+# bs82 = sum(ex_ca ex_mg ex_na ex_k) / sum(ex_ca ex_mg ex_na ex_k acid_tea)
+NCSS_hz$bs82.computed <- with(NCSS_hz, (ex_ca + ex_mg + ex_na + ex_k) / (ex_ca + ex_mg + ex_na + ex_k + acid_tea)) * 100
+NCSS_hz$bs82.computed[which(NCSS_hz$bs82.computed < 0 | NCSS_hz$bs82.computed > 100)] <- NA
+
+# check to make sure that this is correct: YES
+png(file='C:/Users/jmaynard/Documents/measured-vs-computed-bs82.png', width=600, height=600)
+print(hexbin::hexbinplot(bs82 ~ bs82.computed, main='All Pedons', xlab='BS at pH 8.2 (computed)', ylab='BS at pH 8.2 (measured)', data=NCSS_hz, xlim=c(0,100), ylim=c(0,100), asp=1, trans=log, inv=exp) + latticeExtra::layer(panel.abline(0, 1, col='red', lwd=2, lty=2)))
+dev.off()
+
+# replace missing BS82 with computed BS82
+NCSS_hz$bs82 <- ifelse(is.na(NCSS_hz$bs82) & (! is.na(NCSS_hz$bs82.computed)), NCSS_hz$bs82.computed, NCSS_hz$bs82)
+
+# remove temp computed field
+NCSS_hz$bs82.computed <- NULL
+
+# remove negative values
+NCSS_hz$bs82[which(NCSS_hz$bs82 < 0)] <- NA
+
+NCSS_hz <- NCSS_hz %>% filter(!is.na(labsampnum))
+#---------------------------------------------------------------------------------------------------------------------------
+NCSS_site <- NCSS_Pedon_Taxonomy %>%
+                select(pedon_key, pedlabsampnum, upedonid, longitude_decimal_degrees, latitude_decimal_degrees, samp_name, corr_name, corr_class_type, cntrl_depth_to_top, cntrl_depth_to_bot, pedon_completeness_index, SSL_taxorder, SSL_taxsuborder, SSL_taxgrtgroup, SSL_taxsubgrp, SSL_taxpartsize, SSL_taxpartsizemod, SSL_osdtypelocflag, SSL_taxtempregime, SSL_taxtempcl, SSL_taxmoistscl, SSL_taxceactcl, SSL_taxreaction) %>%
+                rename(pedon_id = upedonid, x = longitude_decimal_degrees, y = latitude_decimal_degrees, sampled_as = samp_name, correlated_as = corr_name, correlated_taxon_kind = corr_class_type, pscs_top = cntrl_depth_to_top, pscs_bottom = cntrl_depth_to_bot, taxorder = SSL_taxorder, taxsuborder = SSL_taxsuborder, taxgrtgroup = SSL_taxgrtgroup, taxsubgroup = SSL_taxsubgrp, taxpartsize = SSL_taxpartsize, taxpartsizemod = SSL_taxpartsizemod, osdtypelocflag = SSL_osdtypelocflag, taxtempregime = SSL_taxtempregime, taxtempcl = SSL_taxtempcl, taxmoistscl = SSL_taxmoistscl, taxceactcl = SSL_taxceactcl, taxreaction = SSL_taxreaction)  %>%
+              distinct()  %>% 
+              arrange(pedon_key)
+
+```
+
+
+#Read in NASIS table to join to site table
+```{r}
+petaxhistory <-  read.csv('C:/R_Drive/Data_Files/NASIS_APRIL_2017/CSV_files/petaxhistory.csv', sep="|", header=T)
+site <-  read.csv('C:/R_Drive/Data_Files/NASIS_APRIL_2017/CSV_files/site.csv', sep="|", header=T)
+siteobs <-  read.csv('C:/R_Drive/Data_Files/NASIS_APRIL_2017/CSV_files/siteobs.csv', sep="|", header=T)
+pedon <-  read.csv('C:/R_Drive/Data_Files/NASIS_APRIL_2017/CSV_files/pedon.csv', sep="|", header=T)
+sitebedrock <-  read.csv('C:/R_Drive/Data_Files/NASIS_APRIL_2017/CSV_files/sitebedrock.csv', sep="|", header=T)
+phorizon <-  read.csv('C:/R_Drive/Data_Files/NASIS_APRIL_2017/CSV_files/phorizon.csv', sep="|", header=T)
+phcolor <-  read.csv('C:/R_Drive/Data_Files/NASIS_APRIL_2017/CSV_files/phcolor.csv', sep="|", header=T)
+phsample <-  read.csv('C:/R_Drive/Data_Files/NASIS_APRIL_2017/CSV_files/phsample.csv', sep="|", header=T)
+phfrags <-  read.csv('C:/R_Drive/Data_Files/NASIS_APRIL_2017/CSV_files/phfrags.csv', sep="|", header=T)
+phpores <-  read.csv('C:/R_Drive/Data_Files/NASIS_APRIL_2017/CSV_files/phpores.csv', sep="|", header=T)
+phstructure <-  read.csv('C:/R_Drive/Data_Files/NASIS_APRIL_2017/CSV_files/phstructure.csv', sep="|", header=T)
+
+
+## basic NASIS site data
+NASIS.site <- site %>% 
+    inner_join(siteobs, by = c("siteiid" = "siteiidref")) %>% 
+    left_join(pedon, by = c("siteobsiid" = "siteobsiidref")) %>% 
+    left_join(sitebedrock %>% 
+        select(siteiidref, bedrckdepth, bedrckkind, bedrckhardness) %>% group_by(siteiidref) %>% 
+        arrange(bedrckdepth) %>% slice(n()) %>% ungroup() %>% arrange(bedrckdepth), 
+        by = c("siteiid" = "siteiidref")) %>% 
+    select(siteiid, peiid, usiteid, 
+        upedonid, pedlabsampnum, labdatadescflag, obsdate, longstddecimalde, 
+        latstddecimaldeg, gpspositionalerr, taxonname, taxclname, taxonkind,
+        pedontype, bedrckdepth, bedrckkind, bedrckhardness,  shapeacross, shapedown, geomposhill, geomposmntn, 
+        geompostrce, geomposflats, hillslopeprof, geomslopeseg, slope, elev, 
+        pmgroupname, drainagecl, objwlupdated) %>% 
+    rename(site_id = usiteid, 
+        pedon_id = upedonid, x = longstddecimalde, y = latstddecimaldeg) %>% 
+    distinct() %>% 
+    arrange(peiid)
+
+## color data
+NASIS.color <- phorizon %>% left_join(phcolor, by=c("phiid"="phiidref")) %>%
+                    left_join(phsample, by=c("phiid"="phiidref")) %>%
+                    select(phiid, labsampnum, colorpct, colorhue, colorvalue, colorchroma, colormoistst) %>%
+                    distinct() %>%
+                    arrange(phiid)
+
+NASIS.frags <- phorizon %>% left_join(phfrags, by=c("phiid"="phiidref")) %>%
+                    left_join(phsample, by=c("phiid"="phiidref")) %>%
+                    select(phiid, labsampnum, fragvol, fragkind, fragsize_l, fragsize_r, fragsize_h, fragshp, fraground, fraghard) %>%
+                    distinct() %>%
+                    arrange(phiid)
+
+NASIS.pores <- phorizon %>% left_join(phpores, by=c("phiid"="phiidref")) %>%
+                    left_join(phsample, by=c("phiid"="phiidref")) %>%
+                    select(phiid, labsampnum, poreqty, poresize, poreshp) %>%
+                    distinct() %>%
+                    arrange(labsampnum)
+
+NASIS.structure <- phorizon %>% left_join(phstructure, by=c("phiid"="phiidref")) %>%
+                    left_join(phsample, by=c("phiid"="phiidref")) %>%
+                    select(phiid, labsampnum, structgrade, structsize, structtype, structid, structpartsto) %>%
+                    distinct() %>%
+                    arrange(phiid)
+
+
+NCSS_site_NASIS <- NCSS_site %>% left_join(NASIS.site %>% select(-x, -y, -pedlabsampnum) , by="pedon_id") %>%
+    select(pedon_key, pedlabsampnum, pedon_id, peiid, pscs_top,             
+    pscs_bottom, bedrckdepth, pedon_completeness_index, geomposhill, geomposmntn, geompostrce, geomposflats,  
+    hillslopeprof, geomslopeseg, slope, elev, pmgroupname, drainagecl, taxonname, taxclname, taxonkind, pedontype, taxorder, taxsuborder, 
+    taxgrtgroup,taxsubgroup, taxpartsize, taxpartsizemod, taxceactcl, taxreaction, taxtempcl, taxmoistscl, taxtempregime, osdtypelocflag, x, y)
+
+#------------------------------------------------------------------------------------------------------------------------------------
+#Add petaxhistory, creating long format for multiple update times per pedon
+petaxhistory_sub <- petaxhistory %>% filter(peiidref %in% (NCSS_site_NASIS %>% select(peiid) %>% distinct() %>% pull())) %>% select(peiidref, th_classdate = classdate, th_classtype = classtype, th_taxonname = taxonname, th_taxonkind = taxonkind) %>% mutate(th_taxonname = str_to_lower(th_taxonname))
+petaxhistory_sub$th_classdate <- parse_date_time(petaxhistory_sub$th_classdate, '%m/%d/%Y %H:%M:%S') %>% date()
+
+petaxhistory_sub1 <- petaxhistory_sub %>% group_by(peiidref, th_taxonname) %>% arrange(desc(th_classdate)) %>% dplyr::slice(1) %>% ungroup() 
+petaxhistory_sub2 <- petaxhistory_sub1 %>% group_by(peiidref) %>% arrange(th_classdate) %>% mutate(counter = row_number(peiidref)) %>% ungroup() %>% arrange(peiidref, counter)
+
+#Create classdate wide format
+classdate <- petaxhistory_sub2 %>% select(peiidref, th_classdate, counter) %>% add_column(classdate_obs="th_classdate") %>% unite(classdate_rec, classdate_obs, counter, sep="_") %>% spread(classdate_rec, th_classdate)
+#Create classtype wide format
+classtype <- petaxhistory_sub2 %>% select(peiidref, th_classtype, counter) %>% add_column(classtype_obs="th_classtype") %>% unite(classtype_rec, classtype_obs, counter, sep="_") %>% spread(classtype_rec, th_classtype)
+#Create taxonname_hist wide format
+taxonname_hist <- petaxhistory_sub2 %>% select(peiidref, th_taxonname, counter) %>% add_column(taxonname_hist_obs="th_taxonname") %>% unite(taxonname_hist_rec, taxonname_hist_obs, counter, sep="_") %>% spread(taxonname_hist_rec, th_taxonname)
+#Create taxonkind_hist wide format
+taxonkind_hist <- petaxhistory_sub2 %>% select(peiidref, th_taxonkind, counter) %>% add_column(taxonkind_hist_obs="th_taxonkind") %>% unite(taxonkind_hist_rec, taxonkind_hist_obs, counter, sep="_") %>% spread(taxonkind_hist_rec, th_taxonkind)
+
+firstobs = petaxhistory_sub %>% select(peiidref, th_classdate) %>% group_by(peiidref) %>% arrange(th_classdate) %>% dplyr::slice(1) %>% ungroup() %>% rename(startdate = th_classdate)
+lastobs = petaxhistory_sub %>% select(peiidref, th_classdate) %>% group_by(peiidref) %>% arrange(desc(th_classdate)) %>% dplyr::slice(1) %>% ungroup() %>% rename(recentdate = th_classdate)
+
+petaxhistory_wide <- classdate %>% 
+                        left_join(firstobs, by="peiidref") %>% 
+                        left_join(lastobs, by="peiidref") %>% 
+                        left_join(classtype, by="peiidref") %>%
+                        left_join(taxonname_hist, by="peiidref") %>%
+                        left_join(taxonkind_hist, by="peiidref")
+#Join petaxhistory to NCSS_site_NASIS
+NCSS_site_NASIS <- NCSS_site_NASIS %>% left_join(petaxhistory_wide, by=c("peiid"="peiidref"))
+
+#------------------------------------------------------------------------------------------------------------------------------------
+
+#Run simplifyColorData function to average multiple color values per horizon
+NCSS.color <- NASIS.color %>% filter(labsampnum %in% NCSS_hz$labsampnum)
+x.colors <- simplifyColorData(NCSS.color, id.var = "labsampnum", 
+        wt = "colorpct")
+NCSS_hz_col <- plyr::join(NCSS_hz, x.colors, by = "labsampnum", type = "left", 
+        match = "first")
+
+saveRDS(NCSS_hz_col, "C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_pedon_color.rds")
+saveRDS(NCSS_site_NASIS, "C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_NASIS_site.rds")
+
+
+#-----------------------------------------------------------------------------------------------------------------------------
+#Filtering to check completeness
+NCSS_hz_col %>% filter(!is.na(estimated_oc)) %>% filter(!is.na(moist_soil_color)|!is.na(dry_soil_color))%>% filter(!is.na(sand) & !is.na(silt) & !is.na(clay)) %>% select(pedon_key) %>% distinct() %>% nrow()
+#Note: some horizons are missing only one of the particle size classes and therefore can be back calculated
+
+# horizons(NCSS_hz_col) <- NCSS_hz_col
+# NCSS_hz_col.metadata <- metadata(NCSS_hz_col)
+# NCSS_hz_col.metadata$origin <- "NCSS-SCD/NASIS"
+# metadata(NCSS_hz_col) <- NCSS_hz_col.metadata
+#     
+# KSSL <- list(SPC = NCSS_hz_col, morph = m)
+
+
+
+#---------------------------------------------------------------------------------------------------------------------------
+
+```
+
+```{r}
+#save.image('C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/KSSL_Pedon_Processing.RData')
+load('C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/KSSL_Pedon_Processing.RData')
+```
+
+
+
+
+
+The code below attempts to pull KSSL/NASIS data from SoilWeb. There were some issues gettting the complete dataset.
+Thus, I decided to process it from scratch based on the primary NCSS and NASIS data tables (Code above)
+```{r}
+# #load in MLRA and pedon_key lists
+# NCSS_Site_Location <- read.csv('C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Site_Location.csv', header=TRUE)
+# NCSS_Pedon <- read.csv('C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Pedon_Taxonomy.csv', header=TRUE)
+# NCSS_Layer <- read.csv('C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/NCSS_Layer.csv', header=TRUE)
+# mlra_list <- NCSS_Site_Location %>% select(mlra_code) %>% distinct() %>% filter(mlra_code != "") %>% mutate(mlra_code = as.character(mlra_code)) 
+# mlra_list <- mlra_list %>% filter(!mlra_code == c('115B', '116A'))
+# site_list <- NCSS_Site_Location %>% filter(mlra_code == "")  %>% select(site_key) %>% distinct()
+# pedon_key_list <- NCSS_Pedon %>% filter(site_key %in% site_list$site_key) %>% select(pedon_key) %>% distinct()
+# pedon_key_full_list <- NCSS_Pedon %>% select(pedon_key) %>% distinct()
+# horz = data.frame() 
+# site = data.frame()
+# 
+# #Cycle through MLRA list
+# #for(i in 1:nrow(pedon_key_full_list)){
+# for(i in 1:nrow(mlra_list)){
+#     f <- vector()
+#     s <- NULL
+#     h <- NULL
+# 
+#     mlra <- mlra_list$mlra_code[i]
+#     f <- c(f, paste("&mlra=", mlra, sep = ""))
+#     
+#     f <- paste(f, collapse = "")
+#     site.url <- URLencode(paste0("https://casoilresource.lawr.ucdavis.edu/soil_web/kssl/query.php?gzip=1&what=site", 
+#         f))
+#     hz.url <- URLencode(paste0("https://casoilresource.lawr.ucdavis.edu/soil_web/kssl/query.php?gzip=1&what=horizon", 
+#         f))
+#     
+#     tf.site <- tempfile()
+#     tf.hz <- tempfile()
+#     download.file(url = site.url, destfile = tf.site, mode = "wb", 
+#         quiet = TRUE)
+#     download.file(url = hz.url, destfile = tf.hz, mode = "wb", 
+#         quiet = TRUE)
+#     try(s <- read.table(gzfile(tf.site), header = TRUE, sep = "|", 
+#         stringsAsFactors = FALSE, quote = "", comment.char = ""), 
+#         silent = TRUE)
+#     try(h <- read.table(gzfile(tf.hz), header = TRUE, sep = "|", 
+#         stringsAsFactors = FALSE, quote = "", comment.char = ""), 
+#         silent = TRUE)
+#     if(!is.null(s)){
+#       s <- s %>% mutate(mlra = as.character(mlra))
+#     }
+#     if (all(c(is.null(s), is.null(h)))) {
+#         site <- site
+#         horz <- horz
+#     }else{
+#         site <- s %>% bind_rows(site)
+#         horz <- h %>% bind_rows(horz)
+#     }
+# }
+# 
+# pedon_key_sub <- pedon_key_full_list %>% filter(!pedon_key %in% site$pedon_key)
+# 
+# #Cycle through remaining pedon_id list
+# horz_pid = data.frame() 
+# site_pid = data.frame()
+# 
+# for(i in 1:nrow(pedon_key_sub)){
+#     f <- vector()
+#     s <- NULL
+#     h <- NULL
+#     
+#     pedon_key <- pedon_key_sub$pedon_key[i]
+#     f <- c(f, paste("&pedon_key=", pedon_key, sep = ""))
+# 
+#     f <- paste(f, collapse = "")
+#     site.url <- URLencode(paste0("https://casoilresource.lawr.ucdavis.edu/soil_web/kssl/query.php?gzip=1&what=site", 
+#         f))
+#     hz.url <- URLencode(paste0("https://casoilresource.lawr.ucdavis.edu/soil_web/kssl/query.php?gzip=1&what=horizon", 
+#         f))
+#     
+#     tf.site <- tempfile()
+#     tf.hz <- tempfile()
+#     download.file(url = site.url, destfile = tf.site, mode = "wb", 
+#         quiet = TRUE)
+#     download.file(url = hz.url, destfile = tf.hz, mode = "wb", 
+#         quiet = TRUE)
+#     try(s <- read.table(gzfile(tf.site), header = TRUE, sep = "|", 
+#         stringsAsFactors = FALSE, quote = "", comment.char = ""), 
+#         silent = TRUE)
+#     try(h <- read.table(gzfile(tf.hz), header = TRUE, sep = "|", 
+#         stringsAsFactors = FALSE, quote = "", comment.char = ""), 
+#         silent = TRUE)
+#     if(!is.null(s)){
+#       s <- s %>% mutate(mlra = as.character(mlra), taxonname = as.character(taxonname), pedon_id = as.character(pedon_id))
+#     }
+#     if(!is.null(h)){
+#       h <- h %>% mutate(hzn_desgn_old = as.character(hzn_desgn_old))
+#     }
+#     if (all(c(is.null(s), is.null(h)))) {
+#         site_pid <- site_pid
+#         horz_pid <- horz_pid
+#     }else{
+#         site_pid <- s %>% bind_rows(site_pid)
+#         horz_pid <- h %>% bind_rows(horz_pid)
+#     }
+# }    
+#     
+#   
+# horz_final <- horz_pid %>% bind_rows(horz)    
+# site_final <- site_pid %>% bind_rows(site)    
+# 
+# h <-horz_final
+# s <-site_final
+# depths(h) <- pedon_key ~ hzn_top + hzn_bot
+# site(h) <- s
+# 
+# #Missing pedon_key
+# missing_pedon_key <-  NCSS_Pedon %>% filter(!pedon_key %in% site_final$pedon_key)
+# 
+# Layer_missing <-  NCSS_Layer %>% filter(pedon_key %in% missing_pedon_key$pedon_key)
+# 
+# 
+# 
+# missing_pedon_key$pedon_key[1]
+# 
+# pedon_key <- missing_pedon_key$pedon_key[1]
+# f <- vector()
+# f <- c(f, paste("&pedon_key=", pedon_key, sep = ""))
+# 
+# f <- paste(f, collapse = "")
+# site.url <- URLencode(paste0("https://casoilresource.lawr.ucdavis.edu/soil_web/kssl/query.php?gzip=1&what=site", 
+#     f))
+# hz.url <- URLencode(paste0("https://casoilresource.lawr.ucdavis.edu/soil_web/kssl/query.php?gzip=1&what=horizon", 
+#     f))
+# 
+# tf.site <- tempfile()
+# tf.hz <- tempfile()
+# download.file(url = site.url, destfile = tf.site, mode = "wb", 
+#     quiet = TRUE)
+# download.file(url = hz.url, destfile = tf.hz, mode = "wb", 
+#     quiet = TRUE)
+# try(s <- read.table(gzfile(tf.site), header = TRUE, sep = "|", 
+#     stringsAsFactors = FALSE, quote = "", comment.char = ""), 
+#     silent = TRUE)
+# try(h <- read.table(gzfile(tf.hz), header = TRUE, sep = "|", 
+#     stringsAsFactors = FALSE, quote = "", comment.char = ""), 
+#     silent = TRUE)
+# if(!is.null(s)){
+#   s <- s %>% mutate(mlra = as.character(mlra), taxonname = as.character(taxonname), pedon_id = as.character(pedon_id))
+# }
+# if(!is.null(h)){
+#   h <- h %>% mutate(hzn_desgn_old = as.character(hzn_desgn_old))
+# }
+# 
+# 
+# 
+# 
+# 
+# #--------------------------------------------------------------------------------------------------------------------
+# #Morphology data
+# morp = data.frame()
+# 
+# for(i in 1:nrow(mlra_list)){
+#     f <- vector()
+#     
+#     mlra <- mlra_list$mlra_code[i]
+#     f <- c(f, paste("&mlra=", mlra, sep = ""))
+#     f <- paste(f, collapse = "")
+#     
+#     morph.url <- URLencode(paste0("https://casoilresource.lawr.ucdavis.edu/soil_web/kssl/query.php?gzip=1&format=json&what=nasis_morphologic", 
+#         f))
+#     m <- jsonlite::fromJSON(morph.url)
+#     if (all(is.null(m))){
+#       morp <- morp
+#     }else{
+#       morp <- m %>% bind_rows(morp)
+#     }
+# }    
+# 
+# #Check which pedon_key are missing by filtering on labsampnum
+# morp_pedKey_missing <- NCSS_Layer %>% filter(!labsampnum %in% morp$labsampnum) %>% select(pedon_key,labsampnum) %>% unique()
+# morp_pid = data.frame()
+# 
+# for(i in 1:nrow(morp_pedKey_missing)){
+#     f <- vector()
+#     
+#     pedon_key <- morp_pedKey_missing$pedon_key[i]
+#     f <- c(f, paste("&pedon_key=", pedon_key, sep = ""))
+#     f <- paste(f, collapse = "")
+#     
+#     morph.url <- URLencode(paste0("https://casoilresource.lawr.ucdavis.edu/soil_web/kssl/query.php?gzip=1&format=json&what=nasis_morphologic", 
+#         f))
+#     m <- jsonlite::fromJSON(morph.url)
+#     if (all(is.null(m))){
+#       morp_pid <- morp_pid
+#     }else{
+#       morp_pid <- m %>% bind_rows(morp_pid)
+#     }
+# }    
+# 
+# morph_final <- morp %>% bind_rows(morp_pid)
+# 
+# hh <- horizons(h)
+# 
+# x.colors <- simplifyColorData(morph_final, id.var = "labsampnum", 
+#         wt = "colorpct")
+# 
+# hh <- plyr::join(hh, x.colors, by = "labsampnum", type = "left", 
+#         match = "first")
+# horizons(h) <- hh
+# 
+# h.metadata <- metadata(h)
+# h.metadata$origin <- "KSSL via Soilweb / fetchKSSL"
+# metadata(h) <- h.metadata
+#     
+#     KSSL <- list(SPC = h, morph = m)
+# 
+# 
+# 
+# test <- hh %>% filter(!is.na(moist_soil_color) | !is.na(dry_soil_color)) %>% filter(!is.na(estimated_oc)) %>% filter(!is.na(sand) & !is.na(silt) & !is.na(clay)) #%>% filter(!is.na(x))
+# 
+# #save.image("C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/KSSL_Pedon_Processing.RData")
+# load("C:/R_Drive/Data_Files/ARS_Data/Research_Projects/LandPKS/Soil_Pedon_Databases/KSSL/KSSL_Pedon_Processing.RData")
+```
+
