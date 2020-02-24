@@ -3,10 +3,14 @@ output_dir: ../docs
 navbar:
   title: "Global Pedons"
   left:
-  - text: Home
+  - text: Overview
     href: index.html
-  - text: About
-    href: about.html
+  - text: Data
+    href: data.html
+  - text: Code
+    href: code.html
+  - text: Notes
+    href: notes.html
   - text: License
     href: license.html
 output:
