@@ -1,36 +1,14 @@
 
 <!-- README.md is generated from README.Rmd. Please edit that file -->
 
-# Global.Pedons
+# Global Pedons
 
 [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/jjmaynard/Global.Pedons/master?urlpath=rstudio)
 
-This repository contains the data and code for our paper:
+This repository contains the data and code for the LandPKS Global Soil
+Pedon Database.
 
-> Authors, (YYYY). *Title of your paper goes here*. Name of journal/book
-> <https://doi.org/xxx/xxx>
-
-Our pre-print is online here:
-
-> Authors, (YYYY). *Title of your paper goes here*. Name of
-> journal/book, Accessed 24 Feb 2020. Online at
-> <https://doi.org/xxx/xxx>
-
-### How to cite
-
-Please cite this compendium as:
-
-> Authors, (2020). *Compendium of R code and data for Title of your
-> paper goes here*. Accessed 24 Feb 2020. Online at
-> <https://doi.org/xxx/xxx>
-
-### How to download or install
-
-You can download the compendium as a zip from from this URL:
-<https://github.com/jjmaynard/Global.Pedons/archive/master.zip>
-
-Or you can install this compendium as an R package, Global.Pedons, from
-GitHub with:
+Project Website: <https://jjmaynard.github.io/Global.Pedons/>
 
 ``` r
 # install.packages("devtools")
